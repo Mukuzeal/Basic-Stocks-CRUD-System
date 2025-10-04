@@ -1,0 +1,92 @@
+from kivy.app import App
+from kivy.uix.widget import Widget
+from kivy.properties import NumericProperty, ObjectProperty
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.uix.label import Label
+
+
+class Player(Widget):
+    velocity_y = NumericProperty(0)
+    gravity = -0.5
+    jump_strength = 10
+
+    def move(self):
+        # Apply gravity
+        self.y += self.velocity_y
+        self.velocity_y += self.gravity
+
+        # Stop at ground
+        if self.y <= 50:  
+            self.y = 50
+            self.velocity_y = 0
+
+    def jump(self):
+        if self.y <= 50:  # only jump from ground
+            self.velocity_y = self.jump_strength
+
+
+class GameScreen(Widget):
+    player = ObjectProperty(None)
+    score_label = ObjectProperty(None)
+    score = NumericProperty(0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        Clock.schedule_interval(self.update, 1.0 / 60.0)
+
+    def on_touch_down(self, touch):
+        if touch.x < self.width / 2:
+            self.player.x -= 20  # move left
+        else:
+            self.player.x += 20  # move right
+        self.player.jump()  # jump when touched
+
+    def update(self, dt):
+        self.player.move()
+        self.score += 1 / 60
+        self.score_label.text = f"Score: {int(self.score)}"
+
+
+class SideScrollerApp(App):
+    def build(self):
+        from kivy.uix.floatlayout import FloatLayout
+
+        root = FloatLayout()
+
+        # Ground
+        ground = Widget(size=(Window.width, 50), pos=(0, 0))
+        ground.canvas.before.clear()
+        with ground.canvas.before:
+            from kivy.graphics import Color, Rectangle
+            Color(0.2, 0.6, 0.2, 1)  # green
+            Rectangle(size=ground.size, pos=ground.pos)
+
+        # Player
+        player = Player(size=(50, 50), pos=(100, 50))
+        with player.canvas.before:
+            from kivy.graphics import Color, Rectangle
+            Color(1, 0, 0, 1)  # red box
+            player.rect = Rectangle(size=player.size, pos=player.pos)
+
+        def update_rect(instance, value):
+            player.rect.pos = player.pos
+            player.rect.size = player.size
+        player.bind(pos=update_rect, size=update_rect)
+
+        # Score Label
+        score_label = Label(text="Score: 0", size_hint=(None, None),
+                            pos=(10, Window.height - 40))
+
+        # Game Screen
+        game = GameScreen(player=player, score_label=score_label)
+        game.add_widget(player)
+        game.add_widget(score_label)
+        game.add_widget(ground)
+
+        root.add_widget(game)
+        return root
+
+
+if __name__ == "__main__":
+    SideScrollerApp().run()
