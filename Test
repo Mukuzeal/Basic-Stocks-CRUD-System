@@ -7,45 +7,50 @@ from kivy.core.window import Window
 import random
 
 Window.size = (800, 600)
+Window.clearcolor = (0.05, 0.05, 0.05, 1)  # dark gray background
 
 
 class Target(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.size = (50, 50)
-        self.center = (
-            random.randint(100, Window.width - 100),
-            random.randint(100, Window.height - 100),
-        )
-        self.radius = 25
+        self.radius = 20
+        self.max_radius = 40
+        self.min_radius = 10
         self.growing = True
 
+        # Random position
+        self.center = (
+            random.randint(100, Window.width - 100),
+            random.randint(100, Window.height - 100)
+        )
+
         with self.canvas:
-            self.color = Color(1, 0, 0)
-            self.circle = Ellipse(pos=self.pos, size=self.size)
+            self.color = Color(1, 0, 0, 1)
+            self.circle = Ellipse(pos=(self.center_x - self.radius, self.center_y - self.radius),
+                                  size=(self.radius * 2, self.radius * 2))
 
         Clock.schedule_interval(self.update, 1 / 60)
 
     def update(self, dt):
-        # Animate: grow then shrink
+        # Grow then shrink
         if self.growing:
-            self.radius += 1
-            if self.radius >= 35:
+            self.radius += 0.5
+            if self.radius >= self.max_radius:
                 self.growing = False
         else:
-            self.radius -= 1
-            if self.radius <= 10:
-                # Remove target if it gets too small
+            self.radius -= 0.8
+            if self.radius <= self.min_radius:
                 if self.parent:
                     self.parent.remove_widget(self)
+                Clock.unschedule(self.update)
                 return
 
-        self.size = (self.radius * 2, self.radius * 2)
-        self.circle.size = self.size
+        # Update circle position and size
+        self.circle.size = (self.radius * 2, self.radius * 2)
         self.circle.pos = (self.center_x - self.radius, self.center_y - self.radius)
 
     def on_touch_down(self, touch):
-        # Check if the click is inside the circle
+        # Detect hit
         dx = touch.x - self.center_x
         dy = touch.y - self.center_y
         if (dx ** 2 + dy ** 2) ** 0.5 <= self.radius:
@@ -59,11 +64,11 @@ class AimTrainer(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.score = 0
-        self.score_label = Label(
-            text="Score: 0", pos=(10, Window.height - 40), font_size="20sp"
-        )
+        self.score_label = Label(text="Score: 0",
+                                 pos=(10, Window.height - 40),
+                                 font_size="24sp")
         self.add_widget(self.score_label)
-        Clock.schedule_interval(self.spawn_target, 1.5)
+        Clock.schedule_interval(self.spawn_target, 1.0)
 
     def spawn_target(self, dt):
         target = Target()
