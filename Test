@@ -1,254 +1,83 @@
-import json
-import os
-import random
 from kivy.app import App
 from kivy.uix.widget import Widget
-from kivy.uix.floatlayout import FloatLayout
-from kivy.properties import NumericProperty, ListProperty, ObjectProperty
-from kivy.clock import Clock
-from kivy.animation import Animation
 from kivy.uix.label import Label
-from kivy.uix.button import Button
+from kivy.graphics import Color, Ellipse
+from kivy.clock import Clock
+from kivy.core.window import Window
+import random
 
-HIGHSCORE_FILE = "aim_highscore.json"
+Window.size = (800, 600)
 
-# ---------- Target widget ----------
+
 class Target(Widget):
-    color = ListProperty([1, 0, 0, 1])  # RGBA
-    lifespan = NumericProperty(2.0)     # seconds to shrink
-    min_size = NumericProperty(24)      # final size
-    max_size = NumericProperty(120)     # starting size
-    owner = ObjectProperty(None)        # reference to parent Game
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.size = (self.max_size, self.max_size)
-        # Draw a simple circle using canvas
+        self.size = (50, 50)
+        self.center = (
+            random.randint(100, Window.width - 100),
+            random.randint(100, Window.height - 100),
+        )
+        self.radius = 25
+        self.growing = True
+
         with self.canvas:
-            from kivy.graphics import Color, Ellipse
-            Color(*self.color)
-            self.ellipse = Ellipse(pos=self.pos, size=self.size)
-        # Keep canvas shape updated when pos/size change
-        self.bind(pos=self._update_graphics, size=self._update_graphics)
+            self.color = Color(1, 0, 0)
+            self.circle = Ellipse(pos=self.pos, size=self.size)
 
-        # Animate from big to small
-        self._anim = Animation(size=(self.min_size, self.min_size), duration=self.lifespan, t='linear')
-        self._anim.bind(on_complete=self._on_finished)
-        self._anim.start(self)
+        Clock.schedule_interval(self.update, 1 / 60)
 
-    def _update_graphics(self, *a):
-        self.ellipse.pos = self.pos
-        self.ellipse.size = self.size
+    def update(self, dt):
+        # Animate: grow then shrink
+        if self.growing:
+            self.radius += 1
+            if self.radius >= 35:
+                self.growing = False
+        else:
+            self.radius -= 1
+            if self.radius <= 10:
+                # Remove target if it gets too small
+                if self.parent:
+                    self.parent.remove_widget(self)
+                return
 
-    def _on_finished(self, animation, widget):
-        # target expired (player didn't tap)
-        if self.parent:
-            if self.owner:
-                self.owner.target_missed(self)
-            # remove widget
-            try:
-                self.owner.remove_widget(self)
-            except Exception:
-                pass
+        self.size = (self.radius * 2, self.radius * 2)
+        self.circle.size = self.size
+        self.circle.pos = (self.center_x - self.radius, self.center_y - self.radius)
 
     def on_touch_down(self, touch):
-        # allow the parent to handle touches: check collision here
-        if self.collide_point(*touch.pos):
-            # scored
-            if self.owner:
-                self.owner.target_hit(self)
-            # cancel animation and remove
-            try:
-                self._anim.cancel(self)
-            except Exception:
-                pass
+        # Check if the click is inside the circle
+        dx = touch.x - self.center_x
+        dy = touch.y - self.center_y
+        if (dx ** 2 + dy ** 2) ** 0.5 <= self.radius:
             if self.parent:
-                try:
-                    self.owner.remove_widget(self)
-                except Exception:
-                    pass
+                self.parent.hit_target(self)
             return True
         return super().on_touch_down(touch)
 
 
-# ---------- Game logic ----------
-class GameScreen(FloatLayout):
-    score = NumericProperty(0)
-    lives = NumericProperty(5)
-    highscore = NumericProperty(0)
-
+class AimTrainer(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.spawn_event = None
-        self.spawn_interval = 1.2  # seconds between spawns (decreases with difficulty)
-        self.base_lifespan = 2.2   # how long targets take to shrink (decreases with difficulty)
-        self.is_running = False
-
-        # UI: score, lives, highscore
-        self.score_label = Label(text="Score: 0", size_hint=(None, None), pos=(10, self.height - 30))
-        self.lives_label = Label(text="Lives: 5", size_hint=(None, None), pos=(10, self.height - 60))
-        self.high_label = Label(text="High: 0", size_hint=(None, None), pos=(10, self.height - 90))
-        self.add_widget(self.score_label)
-        self.add_widget(self.lives_label)
-        self.add_widget(self.high_label)
-
-        # Buttons
-        self.start_btn = Button(text="Start", size_hint=(None, None), size=(100, 44), pos=(self.width - 110, self.height - 54))
-        self.start_btn.bind(on_press=lambda x: self.start_game())
-        self.add_widget(self.start_btn)
-
-        self.reset_btn = Button(text="Reset High", size_hint=(None, None), size=(100, 44), pos=(self.width - 110, self.height - 104))
-        self.reset_btn.bind(on_press=lambda x: self.reset_highscore())
-        self.add_widget(self.reset_btn)
-
-        # update UI when layout changes
-        self.bind(size=self._on_resize)
-        self.load_highscore()
-
-    def _on_resize(self, *a):
-        # reposition labels/buttons relative to screen size
-        self.score_label.pos = (10, self.height - 30)
-        self.lives_label.pos = (10, self.height - 60)
-        self.high_label.pos = (10, self.height - 90)
-        self.start_btn.pos = (self.width - 110, self.height - 54)
-        self.reset_btn.pos = (self.width - 110, self.height - 104)
-
-    def start_game(self):
-        if self.is_running:
-            return
-        # Reset game state
-        self.clear_targets()
         self.score = 0
-        self.lives = 5
-        self.spawn_interval = 1.2
-        self.base_lifespan = 2.2
-        self.is_running = True
-        # spawn loop
-        self.spawn_event = Clock.schedule_interval(self.spawn_target, self.spawn_interval)
-        Clock.schedule_interval(self._update_ui, 1 / 10.0)
-
-    def stop_game(self):
-        self.is_running = False
-        if self.spawn_event:
-            self.spawn_event.cancel()
-            self.spawn_event = None
-        # remove remaining targets
-        self.clear_targets()
-        # update highscore if needed
-        if self.score > self.highscore:
-            self.highscore = int(self.score)
-            self.save_highscore()
-
-    def clear_targets(self):
-        # remove all Target instances
-        for child in list(self.children):
-            if isinstance(child, Target):
-                try:
-                    self.remove_widget(child)
-                except Exception:
-                    pass
+        self.score_label = Label(
+            text="Score: 0", pos=(10, Window.height - 40), font_size="20sp"
+        )
+        self.add_widget(self.score_label)
+        Clock.schedule_interval(self.spawn_target, 1.5)
 
     def spawn_target(self, dt):
-        # Increase difficulty gradually based on score
-        difficulty_factor = 1 + (self.score // 10) * 0.07  # small increases per 10 points
-        lifespan = max(0.5, self.base_lifespan / difficulty_factor)
-        interval = max(0.35, self.spawn_interval / difficulty_factor)
+        target = Target()
+        self.add_widget(target)
 
-        # sometimes spawn multiple targets for challenge
-        count = 1 if random.random() > 0.2 else 2
-
-        for _ in range(count):
-            t = Target()
-            t.owner = self
-            t.lifespan = lifespan
-            # color changes slightly with difficulty
-            r = max(0.2, random.random())
-            g = max(0.2, 1 - (self.score / 200))
-            b = max(0.2, random.random())
-            t.color = [r, g, b, 1]
-            # size range scales with difficulty
-            t.max_size = random.randint(80, 140)
-            t.min_size = random.randint(20, 40)
-            t.size = (t.max_size, t.max_size)
-
-            # random position within screen bounds, so target entirely on screen
-            max_x = max(0, self.width - t.width)
-            max_y = max(80, self.height - t.height - 80)  # avoid placing too low below UI
-            x = random.randint(0, int(max_x)) if max_x > 0 else 0
-            y = random.randint(int(self.height * 0.25), int(max_y)) if max_y > 0 else int(self.height * 0.25)
-            t.pos = (x, y)
-            self.add_widget(t)
-
-        # adjust next spawn interval dynamically
-        if self.spawn_event:
-            self.spawn_event.cancel()
-        self.spawn_event = Clock.schedule_once(self.spawn_target, interval)
-
-    def target_hit(self, target):
-        # Award points: bigger targets (still large) give less, small ones give more.
-        # Use ratio of current size to max_size
-        try:
-            size_ratio = (target.size[0] - target.min_size) / max(1.0, target.max_size - target.min_size)
-        except Exception:
-            size_ratio = 1.0
-        # if target is still large (size_ratio close to 1), award 1-2 points; if near small, award more
-        points = int(1 + (1 - size_ratio) * 4)
-        self.score += points
-
-    def target_missed(self, target):
-        self.lives -= 1
-        if self.lives <= 0:
-            self.game_over()
-
-    def _update_ui(self, dt):
-        # called frequently to refresh labels
-        self.score_label.text = f"Score: {int(self.score)}"
-        self.lives_label.text = f"Lives: {int(self.lives)}"
-        self.high_label.text = f"High: {int(self.highscore)}"
-
-    def game_over(self):
-        self.stop_game()
-        # show a simple game over label temporarily
-        go = Label(text=f"GAME OVER\nScore: {int(self.score)}", font_size=32, size_hint=(None, None),
-                   pos=(self.width / 2 - 160, self.height / 2 - 40))
-        self.add_widget(go)
-        Clock.schedule_once(lambda dt: self.remove_widget(go), 2.0)
-
-    # ----- High score persistence -----
-    def load_highscore(self):
-        try:
-            if os.path.exists(HIGHSCORE_FILE):
-                with open(HIGHSCORE_FILE, "r") as f:
-                    data = json.load(f)
-                    self.highscore = int(data.get("highscore", 0))
-        except Exception:
-            self.highscore = 0
-
-    def save_highscore(self):
-        try:
-            with open(HIGHSCORE_FILE, "w") as f:
-                json.dump({"highscore": int(self.highscore)}, f)
-        except Exception:
-            pass
-
-    def reset_highscore(self):
-        self.highscore = 0
-        if os.path.exists(HIGHSCORE_FILE):
-            try:
-                os.remove(HIGHSCORE_FILE)
-            except Exception:
-                pass
-        self._update_ui(0)
+    def hit_target(self, target):
+        self.score += 1
+        self.score_label.text = f"Score: {self.score}"
+        self.remove_widget(target)
 
 
-# ---------- App ----------
 class AimTrainerApp(App):
     def build(self):
-        root = GameScreen()
-        # add instruction label
-        instr = Label(text="Tap targets before they shrink!\nStart ->", size_hint=(None, None), pos=(10, 10))
-        root.add_widget(instr)
-        return root
+        return AimTrainer()
 
 
 if __name__ == "__main__":
